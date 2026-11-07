@@ -1,0 +1,27 @@
+InsightFace antelopev2 pretrained model notice
+
+Bundled model:
+  glintr100.onnx (ResNet100@Glint360K)
+  Package: antelopev2, InsightFace model-zoo release
+  Source: https://github.com/deepinsight/insightface/releases/download/model-zoo/antelopev2.zip
+  Package SHA-256: 8e182f14fc6e80b3bfa375b33eb6cff7ee05d8ef7633e738d1c89021dcf0c5c5
+  Model SHA-256: 4ab1d6435d639628a6f3e5008dd4f929edf4c4124b1a7169e1048f9fef534cdf
+
+USAGE RESTRICTION
+
+InsightFace states that its public pretrained models and models trained with its
+published training data are available for non-commercial research purposes only.
+This APK therefore uses the bundled model only as a research and demonstration
+build. It is not authorized for sale, paid services, advertising-supported use,
+or other commercial deployment without a separate license from InsightFace.
+
+Official policy pinned for this build:
+https://github.com/deepinsight/insightface/blob/1480e705287bc5d59f923b46c260ec6e3e4150f6/README.md#license
+
+Commercial recognition-model licensing contact published by InsightFace:
+recognition-oss-pack@insightface.ai
+
+The InsightFace source code is MIT licensed, but that code license does not
+change the separate non-commercial restriction on the pretrained model weights.
+This Android app executes the ONNX model locally through OpenCV and does not
+upload photographs or embeddings.

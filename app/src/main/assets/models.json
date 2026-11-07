@@ -1,0 +1,18 @@
+[
+  {
+    "file": "yunet.onnx",
+    "upstream": "models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+    "revision": "47534e27c9851bb1128ccc0102f1145e27f23f98",
+    "sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+    "bytes": 232589
+  },
+  {
+    "file": "insightface_glintr100.onnx",
+    "upstream": "https://github.com/deepinsight/insightface/releases/download/model-zoo/antelopev2.zip#antelopev2/glintr100.onnx",
+    "release": "model-zoo",
+    "package_sha256": "8e182f14fc6e80b3bfa375b33eb6cff7ee05d8ef7633e738d1c89021dcf0c5c5",
+    "sha256": "4ab1d6435d639628a6f3e5008dd4f929edf4c4124b1a7169e1048f9fef534cdf",
+    "bytes": 260665334,
+    "usage": "non-commercial research only"
+  }
+]

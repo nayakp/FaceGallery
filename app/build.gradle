@@ -1,0 +1,38 @@
+plugins { id 'com.android.application' }
+// Release signing comes from an untracked keystore.properties; without it, release builds are unsigned.
+def keystoreFile = rootProject.file('keystore.properties')
+def keystore = new Properties()
+if (keystoreFile.exists()) keystoreFile.withInputStream { keystore.load(it) }
+android {
+    if (keystoreFile.exists()) {
+        signingConfigs {
+            release {
+                storeFile file(keystore['storeFile'])
+                storePassword keystore['storePassword']
+                keyAlias keystore['keyAlias']
+                keyPassword keystore['keyPassword']
+            }
+        }
+        buildTypes { release { signingConfig signingConfigs.release } }
+    }
+    namespace 'com.harry.faces'
+    compileSdk 36
+    defaultConfig {
+        applicationId 'com.harry.faces'
+        minSdk 28
+        targetSdk 36
+        versionCode 62
+        versionName '0.62.0-research'
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+}
+dependencies { implementation 'org.opencv:opencv:4.12.0' }
+tasks.register('checkModels') {
+    doLast {
+        ['yunet.onnx', 'insightface_glintr100.onnx', 'YUNET_LICENSE.txt', 'INSIGHTFACE_MODEL_TERMS.txt'].each { name ->
+            def model = file("src/main/assets/$name")
+            if (!model.exists() || model.length() < 100) throw new GradleException('Run python3 tools/fetch_models.py first. Missing: ' + name)
+        }
+    }
+}
+tasks.named('preBuild').configure { dependsOn 'checkModels' }
