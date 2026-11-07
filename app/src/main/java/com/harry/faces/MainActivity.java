@@ -35,6 +35,7 @@ public final class MainActivity extends Activity {
     private static final int DELETE_PERMISSION_REQUEST = 47;
     private static final int PHOTO_LOCATION_PERMISSION_REQUEST = 48;
     private static final int DELETE_FACE_PHOTOS_REQUEST = 49;
+    private static final int MANAGE_MEDIA_REQUEST = 50;
     private static final int NAV_HOME = 1;
     private static final int NAV_SEARCH = 2;
     private static final int NAV_ALBUMS = 3;
@@ -107,6 +108,7 @@ public final class MainActivity extends Activity {
     private long singleCoverPersonId = -1;
     private String photoUri;
     private String pendingDeleteUri;
+    private Runnable pendingManageMediaDelete;
     private String pendingInfoUri;
     private int gridPosition;
     private int homePosition;
@@ -574,10 +576,10 @@ public final class MainActivity extends Activity {
         PopupMenu menu = new PopupMenu(this, anchor);
         boolean preparing=faceDuplicateQueueLoading.contains(currentPersonId);
         android.view.MenuItem check=menu.getMenu().add(0,1,0,
-                preparing?"Checking possible duplicates…":"Check possible duplicates");
+                preparing?"Finding similar faces…":"Find similar faces to combine");
         check.setEnabled(!preparing);
         if(!preparing&&store.hasQueuedDuplicatesForPerson(currentPersonId))
-            menu.getMenu().add(0,2,1,"Review duplicates");
+            menu.getMenu().add(0,2,1,"Review similar faces");
         menu.setOnMenuItemClickListener(item -> {
             if(item.getItemId()==1)prepareFaceDuplicateReview(currentPersonId);
             else if(item.getItemId()==2)showFaceDuplicateQueue(currentPersonId);
@@ -1605,7 +1607,27 @@ public final class MainActivity extends Activity {
                         + faceCount + (faceCount == 1 ? " selected face" : " selected faces")
                         + " from this phone. A photo may also contain other people. This cannot be undone.")
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton("Delete photos", (dialog, which) -> requestBulkPhotoDelete(targets))
+                .setPositiveButton("Delete photos", (dialog, which) -> confirmDeleteFacePhotosAgain(targets))
+                .show();
+    }
+
+    /** Second confirmation: names the selected faces so a wrong selection is easy to spot. */
+    private void confirmDeleteFacePhotosAgain(List<String> targets) {
+        List<String> names = new ArrayList<>();
+        for (long id : deleteFaceSelection) {
+            Store.Person person = store.person(id);
+            if (person != null) names.add(person.title());
+        }
+        String faces = names.size() <= 3 ? String.join(", ", names)
+                : String.join(", ", names.subList(0, 3)) + " and " + (names.size() - 3) + " more";
+        int photoCount = targets.size();
+        new AlertDialog.Builder(this)
+                .setTitle("Are you sure?")
+                .setMessage((photoCount == 1 ? "1 photo" : "All " + photoCount + " photos")
+                        + " containing " + faces + " will be permanently deleted from this phone.")
+                .setNegativeButton("Keep photos", null)
+                .setPositiveButton("Yes, delete", (dialog, which) ->
+                        withMediaManagement(() -> requestBulkPhotoDelete(targets)))
                 .show();
     }
 
@@ -1812,10 +1834,10 @@ public final class MainActivity extends Activity {
 
         addSettingsAction(content, "Name unnamed faces",
                 "Name a face, merge it with another group, or move to the next face.", this::startNamingReview);
-        addSettingsAction(content, "Review possible duplicates",
-                "Compare likely matches and combine groups that show the same person.", this::startDuplicateReview);
-        addSettingsAction(content, "Review skipped duplicates",
-                "Revalidate skipped comparisons and review the ones that are still valid.",
+        addSettingsAction(content, "Find similar faces to combine",
+                "Compare face groups that may be the same person and combine them.", this::startDuplicateReview);
+        addSettingsAction(content, "Review skipped similar faces",
+                "Check the similar faces you skipped earlier and review the ones that still match.",
                 this::startSkippedDuplicateReview);
         addSettingsAction(content, "Delete face photos",
                 "Select face groups and delete every photo containing those faces.",
@@ -2083,7 +2105,7 @@ public final class MainActivity extends Activity {
                 .setTitle("FaceGallery • private gallery")
                 .setMessage("YuNet detects faces; InsightFace antelopev2 ResNet-100 compares them. Processing stays on this phone and the app has no Internet permission. Android may include the scan database in its encrypted system backup when device backup is enabled. Manual export files remain wherever you save them.\n\n"
                         + "A foreground notification keeps user-started face processing running when the app is backgrounded or the screen is locked. Re-evaluating unnamed faces compares their saved embeddings with every named and unnamed group; it does not reopen the original photos. The green Home indicator means CPU-intensive processing is active. Pausing or interruption is safe.\n\n"
-                        + "Recognition is imperfect, especially with side profiles, children and similar-looking people. Use Merge for duplicates; hold a photo to separate a wrong match.\n\n"
+                        + "Recognition is imperfect, especially with side profiles, children and similar-looking people. Use Find similar faces to combine, or Merge, when one person is split into several groups; hold a photo to separate a wrong match.\n\n"
                         + "Research/demo only: the public InsightFace pretrained model is not licensed for commercial use. Model terms are always available from the main menu. Originals are never changed.\n\n"
                         + "Icons by Icons8 (icons8.com).")
                 .setPositiveButton("Close", null)
@@ -2141,8 +2163,49 @@ public final class MainActivity extends Activity {
                 .setNegativeButton("Cancel", null).show();
     }
 
+    /**
+     * Android 12+ shows its own prompt before deleting photos unless the app has
+     * "Media management" access. Before the first delete, offer that access once;
+     * later deletes never ask again, whatever the answer was.
+     */
+    private void withMediaManagement(Runnable delete) {
+        android.content.SharedPreferences prefs = getSharedPreferences("settings", MODE_PRIVATE);
+        if (Build.VERSION.SDK_INT < 31 || MediaStore.canManageMedia(this)
+                || prefs.getBoolean("manage_media_asked", false)) {
+            delete.run();
+            return;
+        }
+        prefs.edit().putBoolean("manage_media_asked", true).apply();
+        new AlertDialog.Builder(this).setTitle("Skip Android's extra prompt?")
+                .setMessage("Android normally asks again before FaceGallery deletes photos. "
+                        + "Turn on \"Media management\" for FaceGallery on the next screen, "
+                        + "and deletes will only use FaceGallery's own confirmation.\n\n"
+                        + "You will only be asked this once.")
+                .setCancelable(false)
+                .setNegativeButton("Not now", (dialog, which) -> delete.run())
+                .setPositiveButton("Turn on", (dialog, which) -> {
+                    pendingManageMediaDelete = delete;
+                    try {
+                        startActivityForResult(new Intent(
+                                android.provider.Settings.ACTION_REQUEST_MANAGE_MEDIA,
+                                Uri.parse("package:" + getPackageName())), MANAGE_MEDIA_REQUEST);
+                    } catch (ActivityNotFoundException error) {
+                        pendingManageMediaDelete = null;
+                        delete.run();
+                    }
+                })
+                .show();
+    }
+
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == MANAGE_MEDIA_REQUEST) {
+            // The Settings screen reports no result; continue the delete the user started.
+            Runnable delete = pendingManageMediaDelete;
+            pendingManageMediaDelete = null;
+            if (delete != null) delete.run();
+            return;
+        }
         if (requestCode == DELETE_PHOTO_REQUEST) {
             String deleted = pendingDeleteUri;
             if (resultCode == RESULT_OK && deleted != null) finishDeletedPhoto(deleted);
@@ -2394,14 +2457,14 @@ public final class MainActivity extends Activity {
 
     private void startDuplicateReview() {
         if (ScanState.current().running()) {
-            toast("Pause scanning before reviewing possible duplicates.");
+            toast("Pause scanning before finding similar faces.");
             return;
         }
         loadDuplicateBatch(0, true);
     }
 
     private void loadDuplicateBatch(int reviewed, boolean announce) {
-        if (announce) toast("Finding the most similar face groups…");
+        if (announce) toast("Looking for similar faces…");
         images.execute(() -> {
             // Answers change group centroids and decision history. Re-rank every
             // 20 decisions, then continue until the user closes the review dialog.
@@ -2410,8 +2473,8 @@ public final class MainActivity extends Activity {
                 if (isDestroyed() || isFinishing()) return;
                 if (pairs.isEmpty()) {
                     render();
-                    toast(reviewed == 0 ? "No likely duplicate face groups were found."
-                            : "No more likely duplicate face groups were found after " + reviewed + " reviews.");
+                    toast(reviewed == 0 ? "No similar faces were found."
+                            : "No more similar faces were found after " + reviewed + " reviews.");
                 } else showDuplicatePair(pairs, 0, reviewed);
             });
         });
@@ -2458,17 +2521,17 @@ public final class MainActivity extends Activity {
 
     private void prepareFaceDuplicateReview(long currentPersonId) {
         if(ScanState.current().running()){
-            toast("Pause scanning before checking possible duplicates.");return;
+            toast("Pause scanning before finding similar faces.");return;
         }
         Store.Person current=store.person(currentPersonId);
         if(current==null){toast("This face group is no longer available.");return;}
         if(faceDuplicateQueueLoading.contains(currentPersonId)){
-            toast("Still processing possible duplicates for face "+current.title()+".");return;
+            toast("Still looking for faces similar to "+current.title()+".");return;
         }
         boolean refreshing=store.hasQueuedDuplicatesForPerson(currentPersonId);
         String faceName=current.title();faceDuplicateQueueLoading.add(currentPersonId);
-        toast((refreshing?"Refreshing":"Processing")
-                +" the list of possible duplicates for face "+faceName+"…");
+        toast((refreshing?"Refreshing faces similar to ":"Looking for faces similar to ")
+                +faceName+"…");
         images.execute(()->{
             List<Store.SimilarPair> matches=store.similarPairsForPerson(
                     currentPersonId,Integer.MAX_VALUE);
@@ -2479,33 +2542,33 @@ public final class MainActivity extends Activity {
                 if(store.person(currentPersonId)==null)
                     toast("This face group is no longer available.");
                 else if(matches.isEmpty())
-                    toast("No likely duplicates were found for face "+faceName+".");
-                else toast(matches.size()+" duplicate "+(matches.size()==1?"face is":"faces are")
-                            +" ready to be reviewed for face "+faceName+".");
+                    toast("No similar faces were found for "+faceName+".");
+                else toast(matches.size()+" similar "+(matches.size()==1?"face":"faces")
+                            +" found for "+faceName+". Open the menu and tap Review similar faces.");
             });
         });
     }
 
     private void showFaceDuplicateQueue(long currentPersonId){
         if(faceDuplicateQueueLoading.contains(currentPersonId)){
-            toast("Possible duplicates are still being prepared for this face.");return;
+            toast("Still looking for similar faces for this person.");return;
         }
         if(ScanState.current().running()){
-            toast("Pause scanning before reviewing possible duplicates.");return;
+            toast("Pause scanning before reviewing similar faces.");return;
         }
         Store.Person current=store.person(currentPersonId);
         List<Store.Person> candidates=store.queuedDuplicatesForPerson(currentPersonId);
         if(current==null){toast("This face group is no longer available.");return;}
-        if(candidates.isEmpty()){toast("There are no prepared duplicates for this face.");return;}
+        if(candidates.isEmpty()){toast("There are no similar faces to review for this person.");return;}
 
         Dialog dialog=new Dialog(this);LinearLayout panel=dialogPanel();
         LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title=text("Duplicates for "+current.title()+" ("+candidates.size()+")",20);
+        TextView title=text("Similar to "+current.title()+" ("+candidates.size()+")",20);
         title.setTypeface(null,Typeface.BOLD);
         title.setSingleLine(true);title.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
         header.addView(title,new LinearLayout.LayoutParams(0,dp(52),1));
         Button close=button("×",dialog::dismiss);close.setTextSize(25);
-        close.setContentDescription("Close duplicate list");
+        close.setContentDescription("Close similar faces list");
         header.addView(close,new LinearLayout.LayoutParams(dp(52),dp(52)));panel.addView(header);
         FaceDuplicateQueueController controller=new FaceDuplicateQueueController(
                 dialog,currentPersonId,candidates);
@@ -2518,7 +2581,7 @@ public final class MainActivity extends Activity {
         pageActions.addView(allDifferent,new LinearLayout.LayoutParams(0,dp(52),1));
         Button combineAll=button("Combine all",
                 ()->confirmCombineAllQueued(controller));
-        combineAll.setContentDescription("Combine every duplicate face group on this page");
+        combineAll.setContentDescription("Combine every similar face group on this page");
         controller.combineAllButton=combineAll;
         pageActions.addView(combineAll,new LinearLayout.LayoutParams(0,dp(52),1));
         LinearLayout.LayoutParams pageActionParams=new LinearLayout.LayoutParams(-1,dp(58));
@@ -2552,7 +2615,7 @@ public final class MainActivity extends Activity {
             this.pages=Math.max(1,pages);
             this.position=Math.max(0,Math.min(position,this.pages-1));
             int page=Math.round(this.position);
-            setContentDescription("Duplicate page "+(page+1)+" of "+this.pages);invalidate();
+            setContentDescription("Similar faces page "+(page+1)+" of "+this.pages);invalidate();
         }
         @Override protected void onDraw(Canvas canvas){
             super.onDraw(canvas);float width=getWidth(),barHeight=dp(4),top=(getHeight()-barHeight)/2f;
@@ -2583,7 +2646,7 @@ public final class MainActivity extends Activity {
         void updateControls(){
             int count=currentPageCandidates().size();
             Store.Person current=store.person(currentPersonId);
-            if(titleView!=null)titleView.setText("Duplicates for "
+            if(titleView!=null)titleView.setText("Similar to "
                     +(current==null?"face":current.title())+" ("+candidates.size()+")");
             if(allDifferentButton!=null){
                 allDifferentButton.setText("All Different ("+count+")");
@@ -2644,7 +2707,7 @@ public final class MainActivity extends Activity {
         boolean dragging,animating;
         DuplicateCarousel(FaceDuplicateQueueController controller){
             super(MainActivity.this);this.controller=controller;setClipChildren(true);
-            setContentDescription("Swipe left or right between duplicate pages");
+            setContentDescription("Swipe left or right between similar faces pages");
             for(int i=0;i<3;i++){
                 ListView page=new ListView(MainActivity.this);
                 page.setDivider(new android.graphics.drawable.ColorDrawable(Color.rgb(225,228,235)));
@@ -2762,7 +2825,7 @@ public final class MainActivity extends Activity {
         Store.Person current=store.person(controller.currentPersonId);
         List<Store.Person> candidates=controller.currentPageCandidates();
         if(current==null||candidates.isEmpty()){
-            if(controller.reload())toast("All duplicates are resolved.");return;
+            if(controller.reload())toast("All similar faces have been reviewed.");return;
         }
         String message="Combine all "+candidates.size()+" face groups on this page into "
                 +current.title()+"? Use this only when every listed face is the same person. ";
@@ -2780,11 +2843,11 @@ public final class MainActivity extends Activity {
         Store.Person current=store.person(controller.currentPersonId);
         List<Store.Person> candidates=controller.currentPageCandidates();
         if(current==null||candidates.isEmpty()){
-            if(controller.reload())toast("All duplicates are resolved.");return;
+            if(controller.reload())toast("All similar faces have been reviewed.");return;
         }
         new AlertDialog.Builder(this).setTitle("Mark this page as Different?")
                 .setMessage("Mark all "+candidates.size()+" face groups on this page as different from "
-                        +current.title()+"? These comparisons will not appear again in duplicate review.")
+                        +current.title()+"? They will not be suggested again as similar faces.")
                 .setPositiveButton("All Different",(ignored,which)->
                         markPageDifferent(controller,current,candidates))
                 .setNegativeButton("Cancel",null).show();
@@ -2801,7 +2864,7 @@ public final class MainActivity extends Activity {
             runOnUiThread(()->{
                 if(progress.isShowing())progress.dismiss();
                 boolean resolved=controller.reloadAfterPageDecision();
-                toast(resolved?"All duplicates are resolved.":changed+" "
+                toast(resolved?"All similar faces have been reviewed.":changed+" "
                         +(changed==1?"comparison":"comparisons")+" marked Different.");
             });
         });
@@ -2820,7 +2883,7 @@ public final class MainActivity extends Activity {
         TextView status=text("Combining "+candidateIds.size()+" face groupsâ€¦",15);
         LinearLayout.LayoutParams statusParams=new LinearLayout.LayoutParams(0,-2,1);
         statusParams.setMargins(dp(14),0,0,0);busy.addView(status,statusParams);
-        AlertDialog progress=new AlertDialog.Builder(this).setTitle("Combining duplicates")
+        AlertDialog progress=new AlertDialog.Builder(this).setTitle("Combining faces")
                 .setView(busy).setCancelable(false).create();progress.show();
         final String nameToKeep=inheritedName;
         images.execute(()->{
@@ -2832,7 +2895,7 @@ public final class MainActivity extends Activity {
                 for(long id:candidateIds)faceCache.remove(id);faceCache.remove(current.id());
                 loadedPersonPhotoId=-1;personId=current.id();controller.changed|=merged>0;
                 boolean resolved=controller.reloadAfterPageDecision();
-                toast(resolved?"All duplicates are resolved.":merged+" face "
+                toast(resolved?"All similar faces have been reviewed.":merged+" face "
                         +(merged==1?"group":"groups")+" combined.");
             });
         });
@@ -2854,7 +2917,7 @@ public final class MainActivity extends Activity {
         LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(2),dp(8),dp(2),dp(8));
         ImageView portrait=facePortrait(candidate.id(),68);
-        portrait.setContentDescription("Possible duplicate "+candidate.title());
+        portrait.setContentDescription("Similar face "+candidate.title());
         row.addView(portrait,new LinearLayout.LayoutParams(dp(68),dp(68)));
         TextView name=text(candidate.title(),12);name.setTypeface(null,Typeface.BOLD);
         name.setGravity(Gravity.CENTER);name.setMaxLines(2);
@@ -2897,7 +2960,7 @@ public final class MainActivity extends Activity {
             faceCache.remove(candidateId);faceCache.remove(currentPersonId);
             loadedPersonPhotoId=-1;personId=currentPersonId;controller.changed=true;
         }
-        if(controller.reload())toast("All duplicates are resolved.");
+        if(controller.reload())toast("All similar faces have been reviewed.");
     }
 
     private void showFaceDuplicateListDialog(Dialog dialog,View panel){
@@ -2910,7 +2973,7 @@ public final class MainActivity extends Activity {
 
     private void startSkippedDuplicateReview() {
         if (ScanState.current().running()) {
-            toast("Pause scanning before reviewing skipped duplicates.");
+            toast("Pause scanning before reviewing skipped similar faces.");
             return;
         }
         loadSkippedDuplicateBatch(0,new HashSet<>());
@@ -2930,8 +2993,8 @@ public final class MainActivity extends Activity {
                 if(isDestroyed()||isFinishing())return;
                 if(pairs.isEmpty()){
                     render();
-                    toast(reviewed==0?"There are no valid skipped duplicate comparisons."
-                            :"No more skipped duplicate comparisons remain.");
+                    toast(reviewed==0?"There are no skipped similar faces to review."
+                            :"No more skipped similar faces remain.");
                 }else showSkippedDuplicatePair(pairs,0,reviewed,reviewedThisSession);
             });
         });
@@ -2940,12 +3003,12 @@ public final class MainActivity extends Activity {
     private Dialog showSkippedRevalidationProgress() {
         Dialog dialog=new Dialog(this);dialog.setCancelable(false);
         LinearLayout panel=dialogPanel();
-        TextView title=text("Review skipped duplicates",20);title.setTypeface(null,Typeface.BOLD);
+        TextView title=text("Skipped similar faces",20);title.setTypeface(null,Typeface.BOLD);
         title.setPadding(0,dp(12),0,dp(12));panel.addView(title,new LinearLayout.LayoutParams(-1,-2));
         LinearLayout status=new LinearLayout(this);status.setGravity(Gravity.CENTER_VERTICAL);
         ProgressBar spinner=new ProgressBar(this);spinner.setIndeterminate(true);
         status.addView(spinner,new LinearLayout.LayoutParams(dp(42),dp(42)));
-        TextView message=text("Revalidating skipped items…",15);message.setPadding(dp(12),0,0,0);
+        TextView message=text("Checking skipped similar faces…",15);message.setPadding(dp(12),0,0,0);
         status.addView(message,new LinearLayout.LayoutParams(0,dp(56),1));
         panel.addView(status,new LinearLayout.LayoutParams(-1,-2));
         showDialog(dialog,panel);return dialog;
@@ -2993,10 +3056,10 @@ public final class MainActivity extends Activity {
         final Dialog dialog=new Dialog(this);
         LinearLayout panel=dialogPanel();
         LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title=text("Review possible duplicates",20);title.setTypeface(null,Typeface.BOLD);
+        TextView title=text("Similar faces",20);title.setTypeface(null,Typeface.BOLD);
         header.addView(title,new LinearLayout.LayoutParams(0,dp(52),1));
         Button close=button("×",dialog::dismiss);close.setTextSize(25);
-        close.setContentDescription("Close duplicate review");
+        close.setContentDescription("Close similar faces review");
         header.addView(close,new LinearLayout.LayoutParams(dp(52),dp(52)));panel.addView(header);
         TextView question=text("Are these the same person? • "+(reviewed+1),14);
         question.setTextColor(Color.DKGRAY);question.setGravity(Gravity.CENTER);
@@ -3607,7 +3670,10 @@ public final class MainActivity extends Activity {
         if (photoUri == null) return;
         new AlertDialog.Builder(this).setTitle("Delete this photo?")
                 .setMessage("This removes the original photo from this device. This action cannot be undone.")
-                .setPositiveButton("Delete", (dialog, which) -> beginDeletePhoto(photoUri))
+                .setPositiveButton("Delete", (dialog, which) -> {
+                    String uri = photoUri;
+                    withMediaManagement(() -> beginDeletePhoto(uri));
+                })
                 .setNegativeButton("Cancel", null).show();
     }
 

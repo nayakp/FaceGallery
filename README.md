@@ -41,9 +41,10 @@ reinstall, use **Settings → Export scan backup** first and import it afterward
 - Delete a photo (Android asks you to confirm).
 
 **Fixing mistakes**
-- **Review possible duplicates:** compare likely matches side by side and combine
-  groups that show the same person. Answers of "different" are remembered.
-- Check a single person for duplicates from their photo-grid menu.
+- **Find similar faces to combine** (in Settings): compare likely matches side by side
+  and combine groups that show the same person. Answers of "different" are remembered.
+- The same option is in each person's photo-grid menu, to search for just that person.
+  When the search finishes, choose **Review similar faces** to combine the matches.
 - Merge two people, rename a person, or remove a wrong face tag from a photo.
 - **Re-evaluate unnamed faces** compares unnamed groups against everyone using the
   saved face data, without rescanning your photos.
@@ -54,8 +55,12 @@ reinstall, use **Settings → Export scan backup** first and import it afterward
   as it goes, and unchanged photos are never scanned twice.
 - **Export / import scan backup:** a `.fgbackup` file with your groups, names and
   face data, for moving to a new phone without rescanning.
-- **Delete face photos:** select people and delete every photo they appear in.
+- **Delete face photos:** select people and delete every photo they appear in, after
+  two confirmations that name the selected people.
 - Your original photos are only changed when you confirm a delete.
+- On Android 12+, the first delete offers to turn on "Media management" access for
+  FaceGallery. With it on, deletes only use FaceGallery's own confirmations instead
+  of also showing Android's system prompt. This is asked only once.
 
 ## Privacy
 

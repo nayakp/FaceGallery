@@ -467,7 +467,10 @@ final class Store extends SQLiteOpenHelper {
                 "skipped_duplicate",null,value,SQLiteDatabase.CONFLICT_IGNORE);
         removeQueuedDuplicate(first,second);
     }
-    synchronized List<SimilarPair> similarPairs(int limit){
+    // Not synchronized: like reevaluateUnnamedPerson, these read-only searches load every
+    // embedding and can run for seconds. Holding the Store monitor that long froze the UI,
+    // whose own Store calls queued behind it. Callers tolerate groups merged meanwhile.
+    List<SimilarPair> similarPairs(int limit){
         List<Person> people=people();
         if(people.size()>400)people=new ArrayList<>(people.subList(0,400));
         Map<Long,Person> byId=peopleById(people);
@@ -494,7 +497,7 @@ final class Store extends SQLiteOpenHelper {
             if(result.size()>=limit)break;
         }return result;
     }
-    synchronized List<SimilarPair> similarPairsForPerson(long personId,int limit){
+    List<SimilarPair> similarPairsForPerson(long personId,int limit){
         Person focus=person(personId);if(focus==null||limit<=0)return Collections.emptyList();
         List<Person> people=new ArrayList<>(people());
         Map<Long,Person> byId=peopleById(people);
@@ -502,11 +505,18 @@ final class Store extends SQLiteOpenHelper {
         float[] focusCenter=centers.get(personId);if(focusCenter==null)return Collections.emptyList();
         Set<PairKey> rejected=pairKeys("not_same");
         Set<PairKey> skipped=pairKeys("skipped_duplicate");
+        // One query for every group sharing a photo, instead of a self-join per group.
+        HashSet<Long> sharesPhoto=new HashSet<>();
+        try(Cursor c=getReadableDatabase().rawQuery(
+                "SELECT DISTINCT b.person FROM face a JOIN face b ON a.uri=b.uri " +
+                        "WHERE a.person=? AND b.person<>?",new String[]{""+personId,""+personId})){
+            while(c.moveToNext())sharesPhoto.add(c.getLong(0));
+        }
         ArrayList<SimilarPair> result=new ArrayList<>();
         for(Map.Entry<Long,float[]> entry:centers.entrySet()){
             long otherId=entry.getKey();if(otherId==personId)continue;
             PairKey key=PairKey.of(personId,otherId);
-            if(rejected.contains(key)||skipped.contains(key)||sharePhoto(personId,otherId))continue;
+            if(rejected.contains(key)||skipped.contains(key)||sharesPhoto.contains(otherId))continue;
             float score=Matcher.cosine(focusCenter,entry.getValue());if(score<.28f)continue;
             Person other=byId.get(otherId);if(other!=null)result.add(new SimilarPair(focus,other,score));
         }
